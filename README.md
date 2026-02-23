@@ -1,3 +1,2 @@
-Portia
----
-A Fluxer Bot For Creating Temporary Voice Channels
+# Bot Skeleton
+Coding Skeleton for Bragi's Fluxer Bots
