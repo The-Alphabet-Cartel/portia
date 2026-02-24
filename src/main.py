@@ -18,7 +18,7 @@ bot.
 Single on_voice_state_update dispatcher pattern used because fluxer-py only
 supports one registered handler per event type.
 ----------------------------------------------------------------------------
-FILE VERSION: v1.2.0
+FILE VERSION: v1.3.0
 LAST MODIFIED: 2026-02-24
 BOT: portia-bot
 CLEAN ARCHITECTURE: Compliant
@@ -126,21 +126,28 @@ def main() -> None:
     async def on_voice_state_update(*args, **kwargs) -> None:
         """Routes all voice state changes to the voice lobby handler.
 
-        DISCOVERY MODE: fluxer-py sends a single dict arg with the full
-        voice state payload. Logging the complete structure.
+        fluxer-py sends a single raw dict with the full voice state payload.
         """
-        if args:
-            import json as _json
-            try:
-                log.info(
-                    f"on_voice_state_update payload:\n"
-                    f"{_json.dumps(args[0], indent=2, default=str)}"
-                )
-            except Exception:
-                log.info(f"on_voice_state_update raw: {args[0]!r}")
+        if not args:
+            return
+
+        payload = args[0]
+        if not isinstance(payload, dict):
+            log.warning(f"Unexpected payload type: {type(payload).__name__}")
+            return
+
+        # Log full payload at DEBUG level for ongoing discovery
+        import json as _json
+        try:
+            log.debug(
+                f"on_voice_state_update:\n"
+                f"{_json.dumps(payload, indent=2, default=str)}"
+            )
+        except Exception:
+            pass
 
         try:
-            await voice_lobby.handle_voice_state_update(*args, **kwargs)
+            await voice_lobby.handle_voice_state_update(payload)
         except Exception as e:
             log.error(
                 f"voice_lobby handler error: {e}\n{traceback.format_exc()}"
