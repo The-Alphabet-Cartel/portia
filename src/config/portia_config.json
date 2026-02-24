@@ -1,0 +1,77 @@
+{
+  "_metadata": {
+    "file_version": "v1.0.0",
+    "last_modified": "2026-02-23",
+    "bot": "portia-bot",
+    "clean_architecture": "Compliant"
+  },
+
+  "logging": {
+    "description": "Logging configuration for portia-bot",
+    "level": "INFO",
+    "format": "human",
+    "file": "/app/logs/portia-bot.log",
+    "console": true,
+    "validation": {
+      "level": {
+        "type": "string",
+        "allowed_values": ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
+        "required": true
+      },
+      "format": {
+        "type": "string",
+        "allowed_values": ["human", "json"],
+        "required": true
+      }
+    }
+  },
+
+  "bot": {
+    "description": "Core bot settings",
+    "command_prefix": "!",
+    "guild_id": "",
+    "validation": {
+      "command_prefix": {
+        "type": "string",
+        "required": false
+      },
+      "guild_id": {
+        "type": "string",
+        "required": false
+      }
+    }
+  },
+
+  "voice": {
+    "description": "Voice channel management settings for Portia",
+    "lobby_channel_id": "",
+    "category_id": "",
+    "empty_timeout": 60,
+    "channel_name_format": "{username}'s VC",
+    "sweep_interval": 300,
+    "validation": {
+      "lobby_channel_id": {
+        "type": "string",
+        "required": true
+      },
+      "category_id": {
+        "type": "string",
+        "required": false
+      },
+      "empty_timeout": {
+        "type": "integer",
+        "range": [30, 300],
+        "required": true
+      },
+      "channel_name_format": {
+        "type": "string",
+        "required": true
+      },
+      "sweep_interval": {
+        "type": "integer",
+        "range": [60, 600],
+        "required": true
+      }
+    }
+  }
+}

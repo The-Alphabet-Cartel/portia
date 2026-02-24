@@ -1,0 +1,31 @@
+# ============================================================================
+# Portia Bot - Docker Compose
+# ============================================================================
+# FILE VERSION: v1.0.0
+# Repository: https://github.com/the-alphabet-cartel/portia
+# Community: The Alphabet Cartel - https://discord.gg/alphabetcartel
+# ============================================================================
+
+services:
+  portia-bot:
+    image: ghcr.io/the-alphabet-cartel/portia:latest
+    container_name: portia-bot
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      BOT_TOKEN_FILE: /run/secrets/bot_token
+    secrets:
+      - bot_token
+    volumes:
+      - /opt/bragi/bots/portia-bot/logs:/app/logs
+      - /opt/bragi/bots/portia-bot/data:/app/data
+    networks:
+      - bragi
+
+secrets:
+  bot_token:
+    file: ./secrets/fluxer_token
+
+networks:
+  bragi:
+    external: true
