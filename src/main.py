@@ -18,7 +18,7 @@ bot.
 Single on_voice_state_update dispatcher pattern used because fluxer-py only
 supports one registered handler per event type.
 ----------------------------------------------------------------------------
-FILE VERSION: v1.1.0
+FILE VERSION: v1.2.0
 LAST MODIFIED: 2026-02-24
 BOT: portia-bot
 CLEAN ARCHITECTURE: Compliant
@@ -126,26 +126,19 @@ def main() -> None:
     async def on_voice_state_update(*args, **kwargs) -> None:
         """Routes all voice state changes to the voice lobby handler.
 
-        DISCOVERY MODE: Using *args/**kwargs to capture the actual
-        fluxer-py signature. Logs will reveal the exact shape.
+        DISCOVERY MODE: fluxer-py sends a single dict arg with the full
+        voice state payload. Logging the complete structure.
         """
-        # Log everything we receive for API discovery
-        log.info(f"on_voice_state_update fired — {len(args)} args, {len(kwargs)} kwargs")
-        for i, arg in enumerate(args):
-            log.info(
-                f"  arg[{i}]: type={type(arg).__name__}, "
-                f"value={arg!r:.200}, "
-                f"attrs={[a for a in dir(arg) if not a.startswith('_')]}"
-            )
-        for k, v in kwargs.items():
-            log.info(
-                f"  kwarg[{k}]: type={type(v).__name__}, "
-                f"value={v!r:.200}, "
-                f"attrs={[a for a in dir(v) if not a.startswith('_')]}"
-            )
+        if args:
+            import json as _json
+            try:
+                log.info(
+                    f"on_voice_state_update payload:\n"
+                    f"{_json.dumps(args[0], indent=2, default=str)}"
+                )
+            except Exception:
+                log.info(f"on_voice_state_update raw: {args[0]!r}")
 
-        # Once we know the shape, route to the handler
-        # For now, pass raw args so voice_lobby can also inspect
         try:
             await voice_lobby.handle_voice_state_update(*args, **kwargs)
         except Exception as e:
