@@ -22,7 +22,7 @@ fluxer-py sends on_voice_state_update as a single raw dict with:
   - member.user.username: str
   - member.user.global_name: str
 ----------------------------------------------------------------------------
-FILE VERSION: v1.2.0
+FILE VERSION: v1.3.0
 LAST MODIFIED: 2026-02-24
 BOT: portia-bot
 CLEAN ARCHITECTURE: Compliant
@@ -174,17 +174,41 @@ class VoiceLobbyHandler:
                 new_channel = await guild.create_channel(
                     type="voice", **create_kwargs
                 )
+            # Attempt 3: Use bot's HTTP client directly
+            elif hasattr(self._bot, "http"):
+                http = self._bot.http
+                self._log.info(
+                    f"Using bot.http for channel creation. "
+                    f"http type: {type(http).__name__}, "
+                    f"http attrs: {[a for a in dir(http) if not a.startswith('_')]}"
+                )
+                # Try common HTTP client patterns
+                if hasattr(http, "create_channel"):
+                    new_channel = await http.create_channel(
+                        int(guild_id), name=channel_name, type=2,
+                        parent_id=int(category_id) if category_id else None,
+                    )
+                elif hasattr(http, "request"):
+                    # Raw request pattern: POST /guilds/{id}/channels
+                    payload_data = {"name": channel_name, "type": 2}
+                    if category_id:
+                        payload_data["parent_id"] = str(category_id)
+                    new_channel = await http.request(
+                        "POST", f"/guilds/{guild_id}/channels", json=payload_data
+                    )
+                else:
+                    self._log.error(
+                        f"bot.http exists but no usable method found.\n"
+                        f"  http attrs: {[a for a in dir(http) if not a.startswith('_')]}"
+                    )
+                    return
             else:
-                # Log available guild methods for discovery
-                guild_methods = [
-                    a for a in dir(guild)
-                    if not a.startswith("_") and "create" in a.lower()
-                ]
-                all_methods = [a for a in dir(guild) if not a.startswith("_")]
+                # Log everything available on bot for discovery
+                bot_attrs = [a for a in dir(self._bot) if not a.startswith("_")]
                 self._log.error(
-                    f"Cannot find channel creation method on guild.\n"
-                    f"  Create-like methods: {guild_methods}\n"
-                    f"  All public attrs: {all_methods}"
+                    f"Cannot find any channel creation path.\n"
+                    f"  guild create methods: {[a for a in dir(guild) if not a.startswith('_') and 'create' in a.lower()]}\n"
+                    f"  bot attrs: {bot_attrs}"
                 )
                 return
 
