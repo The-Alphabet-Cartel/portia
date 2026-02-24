@@ -18,8 +18,8 @@ bot.
 Single on_voice_state_update dispatcher pattern used because fluxer-py only
 supports one registered handler per event type.
 ----------------------------------------------------------------------------
-FILE VERSION: v1.0.0
-LAST MODIFIED: 2026-02-23
+FILE VERSION: v1.1.0
+LAST MODIFIED: 2026-02-24
 BOT: portia-bot
 CLEAN ARCHITECTURE: Compliant
 Repository: https://github.com/PapaBearDoes/bragi
@@ -123,15 +123,31 @@ def main() -> None:
     # Single on_voice_state_update dispatcher
     # -------------------------------------------------------------------------
     @bot.event
-    async def on_voice_state_update(member, before, after) -> None:
+    async def on_voice_state_update(*args, **kwargs) -> None:
         """Routes all voice state changes to the voice lobby handler.
 
-        The exact signature is assumed to be (member, before, after).
-        If fluxer-py uses a different signature, the error logs from
-        VoiceLobbyHandler will reveal the actual shape for adjustment.
+        DISCOVERY MODE: Using *args/**kwargs to capture the actual
+        fluxer-py signature. Logs will reveal the exact shape.
         """
+        # Log everything we receive for API discovery
+        log.info(f"on_voice_state_update fired — {len(args)} args, {len(kwargs)} kwargs")
+        for i, arg in enumerate(args):
+            log.info(
+                f"  arg[{i}]: type={type(arg).__name__}, "
+                f"value={arg!r:.200}, "
+                f"attrs={[a for a in dir(arg) if not a.startswith('_')]}"
+            )
+        for k, v in kwargs.items():
+            log.info(
+                f"  kwarg[{k}]: type={type(v).__name__}, "
+                f"value={v!r:.200}, "
+                f"attrs={[a for a in dir(v) if not a.startswith('_')]}"
+            )
+
+        # Once we know the shape, route to the handler
+        # For now, pass raw args so voice_lobby can also inspect
         try:
-            await voice_lobby.handle_voice_state_update(member, before, after)
+            await voice_lobby.handle_voice_state_update(*args, **kwargs)
         except Exception as e:
             log.error(
                 f"voice_lobby handler error: {e}\n{traceback.format_exc()}"

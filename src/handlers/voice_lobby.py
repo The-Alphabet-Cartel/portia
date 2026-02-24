@@ -15,8 +15,8 @@ VoiceLobbyHandler for portia-bot. Handles voice state update events to
 create temporary voice channels when users join the lobby, and schedules
 cleanup when temporary channels become empty.
 ----------------------------------------------------------------------------
-FILE VERSION: v1.0.0
-LAST MODIFIED: 2026-02-23
+FILE VERSION: v1.1.0
+LAST MODIFIED: 2026-02-24
 BOT: portia-bot
 CLEAN ARCHITECTURE: Compliant
 Repository: https://github.com/PapaBearDoes/bragi
@@ -80,20 +80,37 @@ class VoiceLobbyHandler:
     # -------------------------------------------------------------------------
     # Voice state update handler
     # -------------------------------------------------------------------------
-    async def handle_voice_state_update(
-        self, member: Any, before: Any, after: Any
-    ) -> None:
+    async def handle_voice_state_update(self, *args, **kwargs) -> None:
         """Called by the main.py dispatcher on every voice state change.
 
-        We handle two scenarios:
-        1. User JOINS the lobby channel → create temp VC and move them
-        2. User LEAVES a tracked temp channel → start cleanup timer if empty
-
-        The exact signature of on_voice_state_update in fluxer-py is
-        assumed to match (member, before, after) where before/after have
-        a .channel attribute. Logging will reveal the actual shape if
-        it differs.
+        DISCOVERY MODE: Accepts *args/**kwargs to discover the actual
+        fluxer-py event signature. Will be tightened once confirmed.
         """
+        self._log.debug(
+            f"handle_voice_state_update called with {len(args)} args, {len(kwargs)} kwargs"
+        )
+
+        # Discovery: try to identify the common patterns
+        # Pattern A (discord.py style): (member, before, after)
+        # Pattern B (single object):    (voice_state,)
+        # Pattern C (two objects):      (before, after)
+
+        if len(args) == 3:
+            member, before, after = args
+        elif len(args) == 2:
+            before, after = args
+            member = None
+        elif len(args) == 1:
+            # Single voice state object — inspect it
+            state = args[0]
+            self._log.info(
+                f"Single arg received — type: {type(state).__name__}, "
+                f"attrs: {[a for a in dir(state) if not a.startswith('_')]}"
+            )
+            return
+        else:
+            self._log.warning(f"Unexpected arg count: {len(args)}")
+            return
         self._log.debug(
             f"Voice state update: member={getattr(member, 'id', member)} "
             f"before={getattr(before, 'channel', before)} "
