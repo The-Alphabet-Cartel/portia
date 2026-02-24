@@ -6,12 +6,12 @@ This directory holds Docker Secret files for Portia. These files are **never com
 
 | Filename | Description |
 |---|---|
-| `fluxer_token` | Bot token from the Fluxer Developer Portal |
+| `portia_fluxer_token` | Bot token from the Fluxer Developer Portal |
 
 ## Setup
 
 Create each secret file with no trailing newline:
 
 ```
-printf 'your-token-here' > secrets/fluxer_token
+printf 'your-token-here' > secrets/portia_fluxer_token
 ```

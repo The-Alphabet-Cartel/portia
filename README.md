@@ -62,7 +62,7 @@ Copy `.env.template` to `.env` and configure:
 
 | Secret | File | Description |
 |--------|------|-------------|
-| `bot_token` | `secrets/fluxer_token` | Fluxer bot token |
+| `portia_token` | `secrets/portia_fluxer_token` | Fluxer bot token |
 
 ---
 

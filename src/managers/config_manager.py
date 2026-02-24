@@ -33,7 +33,6 @@ log = logging.getLogger("portia-bot.config_manager")
 
 
 class ConfigManager:
-
     def __init__(self, config_path: str = "/app/src/config/portia_config.json") -> None:
         self._config: dict[str, Any] = {}
         self._load_json(config_path)
@@ -46,7 +45,9 @@ class ConfigManager:
     def _load_json(self, config_path: str) -> None:
         path = Path(config_path)
         if not path.exists():
-            log.warning(f"⚠️ Config file not found at {config_path} — using empty defaults")
+            log.warning(
+                f"⚠️ Config file not found at {config_path} — using empty defaults"
+            )
             return
         try:
             with open(path, "r", encoding="utf-8") as f:
@@ -60,17 +61,17 @@ class ConfigManager:
     # -------------------------------------------------------------------------
     def _apply_env_overrides(self) -> None:
         env_map = {
-            "PORTIA_LOG_LEVEL":            ("logging", "level"),
-            "PORTIA_LOG_FORMAT":           ("logging", "format"),
-            "PORTIA_LOG_FILE":             ("logging", "file"),
-            "PORTIA_LOG_CONSOLE":          ("logging", "console"),
-            "PORTIA_COMMAND_PREFIX":        ("bot", "command_prefix"),
-            "PORTIA_GUILD_ID":             ("bot", "guild_id"),
-            "PORTIA_LOBBY_CHANNEL_ID":     ("voice", "lobby_channel_id"),
-            "PORTIA_CATEGORY_ID":          ("voice", "category_id"),
-            "PORTIA_EMPTY_TIMEOUT":        ("voice", "empty_timeout"),
-            "PORTIA_CHANNEL_NAME_FORMAT":  ("voice", "channel_name_format"),
-            "PORTIA_SWEEP_INTERVAL":       ("voice", "sweep_interval"),
+            "PORTIA_LOG_LEVEL": ("logging", "level"),
+            "PORTIA_LOG_FORMAT": ("logging", "format"),
+            "PORTIA_LOG_FILE": ("logging", "file"),
+            "PORTIA_LOG_CONSOLE": ("logging", "console"),
+            "PORTIA_COMMAND_PREFIX": ("bot", "command_prefix"),
+            "PORTIA_GUILD_ID": ("bot", "guild_id"),
+            "PORTIA_LOBBY_CHANNEL_ID": ("voice", "lobby_channel_id"),
+            "PORTIA_CATEGORY_ID": ("voice", "category_id"),
+            "PORTIA_EMPTY_TIMEOUT": ("voice", "empty_timeout"),
+            "PORTIA_CHANNEL_NAME_FORMAT": ("voice", "channel_name_format"),
+            "PORTIA_SWEEP_INTERVAL": ("voice", "sweep_interval"),
         }
         for env_key, (section, key) in env_map.items():
             value = os.environ.get(env_key)
@@ -82,7 +83,7 @@ class ConfigManager:
     # Layer 3: Docker Secret overrides (sensitive)
     # -------------------------------------------------------------------------
     def _apply_secret_overrides(self) -> None:
-        token_file = os.environ.get("BOT_TOKEN_FILE", "/run/secrets/bot_token")
+        token_file = os.environ.get("TOKEN_FILE", "/run/secrets/portia_token")
         token = self._read_secret_file(token_file)
         if token:
             self._config.setdefault("bot", {})["token"] = token
@@ -112,7 +113,9 @@ class ConfigManager:
         try:
             return int(value)
         except (TypeError, ValueError):
-            log.warning(f"⚠️ [{section}.{key}] expected int, got {value!r} — using {fallback}")
+            log.warning(
+                f"⚠️ [{section}.{key}] expected int, got {value!r} — using {fallback}"
+            )
             return fallback
 
     def get_bool(self, section: str, key: str, fallback: bool = True) -> bool:
