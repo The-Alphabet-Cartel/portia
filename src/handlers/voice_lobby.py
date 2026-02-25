@@ -340,50 +340,45 @@ class VoiceLobbyHandler:
         if not entry:
             return
 
-        if not self._http:
-            return
-
         try:
-            # Fetch channel via fluxer-py first, fall back to HTTP
-            resp = None
+            # Try fluxer-py's fetch_channel first
             channel_data = None
             try:
                 ch = await self._bot.fetch_channel(channel_id)
                 if isinstance(ch, dict):
                     channel_data = ch
                 else:
-                    channel_data = {
-                        "id": getattr(ch, "id", channel_id),
-                        "voice_states": getattr(ch, "voice_states", []),
-                        "members": getattr(ch, "members", []),
-                    }
+                    ch_attrs = [a for a in dir(ch) if not a.startswith("_")]
                     self._log.debug(
-                        f"fetch_channel returned type={type(ch).__name__}, "
-                        f"attrs={[a for a in dir(ch) if not a.startswith('_')]}"
+                        f"fetch_channel type={type(ch).__name__}, attrs={ch_attrs}"
                     )
+                    channel_data = {"id": channel_id}
+                    for key in ["voice_states", "members", "member_count"]:
+                        val = getattr(ch, key, None)
+                        if val is not None:
+                            channel_data[key] = val
             except Exception as e:
                 self._log.debug(f"bot.fetch_channel({channel_id}) failed: {e}")
 
-            # Fall back to HTTP if fluxer-py didn't work
-            if channel_data is None:
+            # Fall back to HTTP only if fluxer-py didn't work
+            if channel_data is None and self._http:
                 resp = await self._http.get(f"/channels/{channel_id}")
+                if resp.status_code == 404:
+                    self._log.info(f"Channel {channel_id} already gone — untracking")
+                    self._tracker.untrack(channel_id)
+                    return
+                if resp.status_code >= 400:
+                    self._log.error(
+                        f"Error fetching channel {channel_id}: "
+                        f"{resp.status_code} {resp.text}"
+                    )
+                    return
+                channel_data = resp.json()
 
-            if resp.status_code == 404:
-                self._log.info(f"Channel {channel_id} already gone — untracking")
-                self._tracker.untrack(channel_id)
+            if channel_data is None:
                 return
 
-            if resp.status_code >= 400:
-                self._log.error(
-                    f"Error fetching channel {channel_id}: "
-                    f"{resp.status_code} {resp.text}"
-                )
-                return
-
-            channel_data = resp.json()
-
-            # Determine member count from channel data
-            # Look for voice_states, members, or recipient count
+            # Determine member count
             member_count = 0
             voice_states = channel_data.get("voice_states", [])
             if voice_states:
@@ -401,11 +396,8 @@ class VoiceLobbyHandler:
             if member_count > 0:
                 return
 
-            # Channel is empty — start cleanup timer
             self._start_cleanup_timer(channel_id, timeout)
 
-        except httpx.HTTPError as e:
-            self._log.error(f"HTTP error checking channel {channel_id}: {e}")
         except Exception as e:
             self._log.error(
                 f"Unexpected error checking channel {channel_id}: {e}\n"
