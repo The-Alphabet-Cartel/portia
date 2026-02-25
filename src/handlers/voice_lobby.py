@@ -248,16 +248,32 @@ class VoiceLobbyHandler:
                 member_attrs = [a for a in dir(member) if not a.startswith("_")]
                 self._log.debug(f"Member attrs: {member_attrs}")
 
-                if hasattr(member, "move_to"):
+                if hasattr(member, "edit"):
+                    # member.edit() requires guild_id as keyword arg
+                    # Try channel_id first, then voice_channel_id
+                    try:
+                        await member.edit(
+                            guild_id=int(guild_id),
+                            channel_id=str(new_channel_id),
+                        )
+                        moved = True
+                    except TypeError as te:
+                        self._log.debug(f"member.edit with channel_id failed: {te}")
+                        try:
+                            await member.edit(
+                                guild_id=int(guild_id),
+                                voice_channel_id=str(new_channel_id),
+                            )
+                            moved = True
+                        except TypeError as te2:
+                            self._log.debug(
+                                f"member.edit with voice_channel_id failed: {te2}"
+                            )
+                elif hasattr(member, "move_to"):
                     new_ch = await self._bot.fetch_channel(new_channel_id)
                     await member.move_to(new_ch)
                     moved = True
-                elif hasattr(member, "edit"):
-                    await member.edit(channel_id=new_channel_id)
-                    moved = True
-                elif hasattr(member, "modify"):
-                    await member.modify(channel_id=new_channel_id)
-                    moved = True
+
             except Exception as e:
                 self._log.debug(f"fluxer-py member move attempt failed: {e}")
 
