@@ -71,11 +71,10 @@ class VoiceLobbyHandler:
         # HTTP client for direct API calls
         self._http: Optional[httpx.AsyncClient] = None
 
-        # Resolve API base URL from bot
-        self._api_url = getattr(bot, "api_url", "https://api.fluxer.app/v1")
-        if isinstance(self._api_url, str) and self._api_url.endswith("/"):
+        # Resolve API base URL — bot.api_url may be None before connection
+        self._api_url = getattr(bot, "api_url", None) or "https://api.fluxer.app/v1"
+        if self._api_url.endswith("/"):
             self._api_url = self._api_url.rstrip("/")
-        self._log.debug(f"API base URL: {self._api_url}")
 
     def set_token(self, token: str) -> None:
         """Set the bot token for authenticated HTTP requests."""
@@ -227,9 +226,7 @@ class VoiceLobbyHandler:
             new_channel_id = int(channel_data.get("id", 0))
 
             if not new_channel_id:
-                self._log.error(
-                    f"Channel creation returned no ID: {channel_data}"
-                )
+                self._log.error(f"Channel creation returned no ID: {channel_data}")
                 return
 
             self._log.success(  # type: ignore[attr-defined]
@@ -237,9 +234,7 @@ class VoiceLobbyHandler:
             )
 
             # Track the channel
-            self._tracker.track(
-                new_channel_id, int(user_id), username, int(guild_id)
-            )
+            self._tracker.track(new_channel_id, int(user_id), username, int(guild_id))
 
             # --- Move user to the new channel via REST API ---
             # PATCH /guilds/{guild_id}/members/{user_id} with channel_id
@@ -259,8 +254,7 @@ class VoiceLobbyHandler:
             self._log.error(f"HTTP error during lobby join: {e}")
         except Exception as e:
             self._log.error(
-                f"Unexpected error during lobby join: {e}\n"
-                f"{traceback.format_exc()}"
+                f"Unexpected error during lobby join: {e}\n{traceback.format_exc()}"
             )
 
     # -------------------------------------------------------------------------
@@ -279,9 +273,7 @@ class VoiceLobbyHandler:
 
         try:
             # Fetch channel details via REST API
-            resp = await self._http.get(
-                f"/channels/{channel_id}"
-            )
+            resp = await self._http.get(f"/channels/{channel_id}")
 
             if resp.status_code == 404:
                 self._log.info(f"Channel {channel_id} already gone — untracking")
@@ -355,8 +347,7 @@ class VoiceLobbyHandler:
             pass  # Timer was cancelled because someone joined
         except Exception as e:
             self._log.error(
-                f"Cleanup task error for {channel_id}: {e}\n"
-                f"{traceback.format_exc()}"
+                f"Cleanup task error for {channel_id}: {e}\n{traceback.format_exc()}"
             )
 
     async def _delete_temp_channel(self, channel_id: int) -> None:
@@ -369,9 +360,7 @@ class VoiceLobbyHandler:
             return
 
         try:
-            resp = await self._http.delete(
-                f"/channels/{channel_id}"
-            )
+            resp = await self._http.delete(f"/channels/{channel_id}")
 
             if resp.status_code == 404:
                 self._log.info(f"Channel {channel_id} already gone — untracking")

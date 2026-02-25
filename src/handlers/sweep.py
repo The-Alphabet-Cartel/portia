@@ -55,8 +55,8 @@ class SweepHandler:
         self._http: Optional[httpx.AsyncClient] = None
 
         # Resolve API base URL from bot
-        api_url = getattr(bot, "api_url", "https://api.fluxer.app/v1")
-        if isinstance(api_url, str) and api_url.endswith("/"):
+        api_url = getattr(bot, "api_url", None) or "https://api.fluxer.app/v1"
+        if api_url.endswith("/"):
             api_url = api_url.rstrip("/")
         self._api_url = api_url
 
@@ -80,9 +80,7 @@ class SweepHandler:
         if self._task and not self._task.done():
             return
         self._task = asyncio.create_task(self._sweep_loop())
-        self._log.info(
-            f"Sweep task started (interval: {self._sweep_interval()}s)"
-        )
+        self._log.info(f"Sweep task started (interval: {self._sweep_interval()}s)")
 
     def stop(self) -> None:
         """Stop the periodic sweep loop."""
@@ -99,9 +97,7 @@ class SweepHandler:
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                self._log.error(
-                    f"Sweep loop error: {e}\n{traceback.format_exc()}"
-                )
+                self._log.error(f"Sweep loop error: {e}\n{traceback.format_exc()}")
                 # Continue the loop after errors
                 await asyncio.sleep(30)
 
@@ -151,20 +147,14 @@ class SweepHandler:
                     empty_ids.append(channel_id_str)
 
             except httpx.HTTPError as e:
-                self._log.warning(
-                    f"Sweep: HTTP error for {channel_id_str}: {e}"
-                )
+                self._log.warning(f"Sweep: HTTP error for {channel_id_str}: {e}")
             except Exception as e:
-                self._log.warning(
-                    f"Sweep: unexpected error for {channel_id_str}: {e}"
-                )
+                self._log.warning(f"Sweep: unexpected error for {channel_id_str}: {e}")
 
         # Prune stale entries (channel no longer exists on server)
         for channel_id_str in stale_ids:
             self._tracker.untrack(int(channel_id_str))
-            self._log.info(
-                f"Sweep: pruned stale tracking entry for {channel_id_str}"
-            )
+            self._log.info(f"Sweep: pruned stale tracking entry for {channel_id_str}")
 
         # Delete empty tracked channels
         for channel_id_str in empty_ids:
@@ -182,18 +172,13 @@ class SweepHandler:
                             f"(was: {entry['owner_name']}'s VC)"
                         )
                     else:
-                        self._log.info(
-                            f"Sweep: channel {channel_id_str} already gone"
-                        )
+                        self._log.info(f"Sweep: channel {channel_id_str} already gone")
                 else:
                     self._log.error(
-                        f"Sweep: failed to delete {channel_id_str}: "
-                        f"{resp.status_code}"
+                        f"Sweep: failed to delete {channel_id_str}: {resp.status_code}"
                     )
             except httpx.HTTPError as e:
-                self._log.error(
-                    f"Sweep: HTTP error deleting {channel_id_str}: {e}"
-                )
+                self._log.error(f"Sweep: HTTP error deleting {channel_id_str}: {e}")
 
         summary_parts = []
         if stale_ids:
@@ -211,7 +196,5 @@ class SweepHandler:
         if not tracked:
             self._log.info("Startup reconciliation: no tracked channels")
             return
-        self._log.info(
-            f"Startup reconciliation: checking {len(tracked)} channel(s)"
-        )
+        self._log.info(f"Startup reconciliation: checking {len(tracked)} channel(s)")
         await self.run_sweep()
