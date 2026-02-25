@@ -61,12 +61,12 @@ class ConfigManager:
     # -------------------------------------------------------------------------
     def _apply_env_overrides(self) -> None:
         env_map = {
-            "PORTIA_LOG_LEVEL": ("logging", "level"),
-            "PORTIA_LOG_FORMAT": ("logging", "format"),
-            "PORTIA_LOG_FILE": ("logging", "file"),
-            "PORTIA_LOG_CONSOLE": ("logging", "console"),
-            "PORTIA_COMMAND_PREFIX": ("bot", "command_prefix"),
-            "PORTIA_GUILD_ID": ("bot", "guild_id"),
+            "LOG_LEVEL": ("logging", "level"),
+            "LOG_FORMAT": ("logging", "format"),
+            "LOG_FILE": ("logging", "file"),
+            "LOG_CONSOLE": ("logging", "console"),
+            "COMMAND_PREFIX": ("bot", "command_prefix"),
+            "GUILD_ID": ("bot", "guild_id"),
             "PORTIA_LOBBY_CHANNEL_ID": ("voice", "lobby_channel_id"),
             "PORTIA_CATEGORY_ID": ("voice", "category_id"),
             "PORTIA_EMPTY_TIMEOUT": ("voice", "empty_timeout"),

@@ -49,9 +49,9 @@ Copy `.env.template` to `.env` and configure:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `PORTIA_LOG_LEVEL` | `INFO` | DEBUG, INFO, WARNING, ERROR, CRITICAL |
-| `PORTIA_LOG_FORMAT` | `human` | `human` (colorized) or `json` (structured) |
-| `PORTIA_GUILD_ID` | — | Fluxer guild ID |
+| `LOG_LEVEL` | `INFO` | DEBUG, INFO, WARNING, ERROR, CRITICAL |
+| `LOG_FORMAT` | `human` | `human` (colorized) or `json` (structured) |
+| `GUILD_ID` | — | Fluxer guild ID |
 | `PORTIA_LOBBY_CHANNEL_ID` | — | Voice channel ID to monitor (**required**) |
 | `PORTIA_CATEGORY_ID` | — | Category for temp channels (optional) |
 | `PORTIA_EMPTY_TIMEOUT` | `60` | Seconds before deleting empty channel (30–300) |
