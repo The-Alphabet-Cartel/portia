@@ -238,14 +238,21 @@ class VoiceLobbyHandler:
 
             # --- Move user to the new channel via REST API ---
             # PATCH /guilds/{guild_id}/members/{user_id} with channel_id
-            move_resp = await self._http.patch(
-                f"/guilds/{guild_id}/members/{user_id}",
-                json={"channel_id": str(new_channel_id)},
+            move_url = f"/guilds/{guild_id}/members/{user_id}"
+            move_payload = {"channel_id": str(new_channel_id)}
+            self._log.debug(
+                f"Move request: PATCH {self._api_url}{move_url} payload={move_payload}"
             )
+            move_resp = await self._http.patch(move_url, json=move_payload)
 
             if move_resp.status_code >= 400:
                 self._log.error(
-                    f"Member move failed: {move_resp.status_code} {move_resp.text}"
+                    f"Member move failed: PATCH {move_url} → "
+                    f"{move_resp.status_code} {move_resp.text}"
+                )
+                # Discovery: try alternate auth format
+                self._log.debug(
+                    f"Auth header: {self._http.headers.get('Authorization', '')[:20]}..."
                 )
             else:
                 self._log.info(f"Moved {username} into '{channel_name}'")
