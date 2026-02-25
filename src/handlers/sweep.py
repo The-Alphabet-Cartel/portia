@@ -15,9 +15,11 @@ SweepHandler for portia-bot. Runs a periodic background task that reconciles
 tracked temp channels with actual server state. Cleans up orphaned channels
 (e.g. from a restart where events were missed) and prunes stale tracking
 entries for channels that no longer exist.
+
+Uses direct HTTP calls to the Fluxer API consistent with VoiceLobbyHandler.
 ----------------------------------------------------------------------------
-FILE VERSION: v1.0.0
-LAST MODIFIED: 2026-02-23
+FILE VERSION: v1.1.0
+LAST MODIFIED: 2026-02-25
 BOT: portia-bot
 CLEAN ARCHITECTURE: Compliant
 Repository: https://github.com/PapaBearDoes/bragi
@@ -26,8 +28,9 @@ Repository: https://github.com/PapaBearDoes/bragi
 
 import asyncio
 import traceback
-from typing import Any
+from typing import Any, Optional
 
+import httpx
 import fluxer
 
 
@@ -49,12 +52,28 @@ class SweepHandler:
         self._log = logging_manager.get_logger("sweep")
         self._tracker = channel_tracker
         self._task: asyncio.Task | None = None
+        self._http: Optional[httpx.AsyncClient] = None
+
+        # Resolve API base URL from bot
+        api_url = getattr(bot, "api_url", "https://api.fluxer.app/v1")
+        if isinstance(api_url, str) and api_url.endswith("/"):
+            api_url = api_url.rstrip("/")
+        self._api_url = api_url
+
+    def set_token(self, token: str) -> None:
+        """Set the bot token for authenticated HTTP requests."""
+        self._http = httpx.AsyncClient(
+            base_url=self._api_url,
+            headers={
+                "Authorization": f"Bot {token}",
+                "Content-Type": "application/json",
+            },
+            timeout=15.0,
+        )
+        self._log.debug("Sweep HTTP client initialised")
 
     def _sweep_interval(self) -> int:
         return self._config.get_int("voice", "sweep_interval", 300)
-
-    def _empty_timeout(self) -> int:
-        return self._config.get_int("voice", "empty_timeout", 60)
 
     def start(self) -> None:
         """Begin the periodic sweep loop."""
@@ -93,38 +112,51 @@ class SweepHandler:
             self._log.debug("Sweep: no tracked channels")
             return
 
+        if not self._http:
+            self._log.warning("Sweep: HTTP client not initialised")
+            return
+
         self._log.debug(f"Sweep: checking {len(tracked)} tracked channel(s)")
         stale_ids: list[str] = []
         empty_ids: list[str] = []
 
         for channel_id_str, entry in tracked.items():
-            channel_id = int(channel_id_str)
             try:
-                guild = await self._bot.fetch_guild(entry["guild_id"])
-                channel = await guild.fetch_channel(channel_id)
+                resp = await self._http.get(f"/channels/{channel_id_str}")
+
+                if resp.status_code == 404:
+                    stale_ids.append(channel_id_str)
+                    continue
+
+                if resp.status_code >= 400:
+                    self._log.warning(
+                        f"Sweep: error fetching channel {channel_id_str}: "
+                        f"{resp.status_code}"
+                    )
+                    continue
+
+                channel_data = resp.json()
 
                 # Check if empty
-                members = getattr(channel, "members", None)
-                voice_states = getattr(channel, "voice_states", None)
                 member_count = 0
-                if members is not None:
-                    member_count = len(members)
-                elif voice_states is not None:
+                voice_states = channel_data.get("voice_states", [])
+                if voice_states:
                     member_count = len(voice_states)
+                else:
+                    members = channel_data.get("members", [])
+                    if members:
+                        member_count = len(members)
 
                 if member_count == 0:
                     empty_ids.append(channel_id_str)
 
-            except fluxer.HTTPException as e:
-                if "404" in str(e) or "Unknown Channel" in str(e):
-                    stale_ids.append(channel_id_str)
-                else:
-                    self._log.warning(
-                        f"Sweep: error checking channel {channel_id}: {e}"
-                    )
+            except httpx.HTTPError as e:
+                self._log.warning(
+                    f"Sweep: HTTP error for {channel_id_str}: {e}"
+                )
             except Exception as e:
                 self._log.warning(
-                    f"Sweep: unexpected error for {channel_id}: {e}"
+                    f"Sweep: unexpected error for {channel_id_str}: {e}"
                 )
 
         # Prune stale entries (channel no longer exists on server)
@@ -136,26 +168,32 @@ class SweepHandler:
 
         # Delete empty tracked channels
         for channel_id_str in empty_ids:
-            channel_id = int(channel_id_str)
             entry = tracked.get(channel_id_str)
             if not entry:
                 continue
             try:
-                guild = await self._bot.fetch_guild(entry["guild_id"])
-                channel = await guild.fetch_channel(channel_id)
-                await channel.delete(reason="Portia sweep: temp VC empty")
-                self._tracker.untrack(channel_id)
-                self._log.success(  # type: ignore[attr-defined]
-                    f"Sweep: deleted empty temp VC {channel_id} "
-                    f"(was: {entry['owner_name']}'s VC)"
-                )
-            except fluxer.HTTPException as e:
-                if "404" in str(e) or "Unknown Channel" in str(e):
-                    self._tracker.untrack(channel_id)
+                resp = await self._http.delete(f"/channels/{channel_id_str}")
+
+                if resp.status_code == 404 or resp.status_code < 400:
+                    self._tracker.untrack(int(channel_id_str))
+                    if resp.status_code < 400:
+                        self._log.success(  # type: ignore[attr-defined]
+                            f"Sweep: deleted empty temp VC {channel_id_str} "
+                            f"(was: {entry['owner_name']}'s VC)"
+                        )
+                    else:
+                        self._log.info(
+                            f"Sweep: channel {channel_id_str} already gone"
+                        )
                 else:
                     self._log.error(
-                        f"Sweep: failed to delete {channel_id}: {e}"
+                        f"Sweep: failed to delete {channel_id_str}: "
+                        f"{resp.status_code}"
                     )
+            except httpx.HTTPError as e:
+                self._log.error(
+                    f"Sweep: HTTP error deleting {channel_id_str}: {e}"
+                )
 
         summary_parts = []
         if stale_ids:

@@ -18,8 +18,8 @@ bot.
 Single on_voice_state_update dispatcher pattern used because fluxer-py only
 supports one registered handler per event type.
 ----------------------------------------------------------------------------
-FILE VERSION: v1.3.0
-LAST MODIFIED: 2026-02-24
+FILE VERSION: v1.4.0
+LAST MODIFIED: 2026-02-25
 BOT: portia-bot
 CLEAN ARCHITECTURE: Compliant
 Repository: https://github.com/PapaBearDoes/bragi
@@ -112,11 +112,13 @@ def main() -> None:
     voice_lobby = VoiceLobbyHandler(
         bot, config_manager, logging_manager, channel_tracker
     )
+    voice_lobby.set_token(token)
     log.success("Loaded handler: voice_lobby")  # type: ignore[attr-defined]
 
     sweep = SweepHandler(
         bot, config_manager, logging_manager, channel_tracker
     )
+    sweep.set_token(token)
     log.success("Loaded handler: sweep")  # type: ignore[attr-defined]
 
     # -------------------------------------------------------------------------
@@ -135,16 +137,6 @@ def main() -> None:
         if not isinstance(payload, dict):
             log.warning(f"Unexpected payload type: {type(payload).__name__}")
             return
-
-        # Log full payload at DEBUG level for ongoing discovery
-        import json as _json
-        try:
-            log.debug(
-                f"on_voice_state_update:\n"
-                f"{_json.dumps(payload, indent=2, default=str)}"
-            )
-        except Exception:
-            pass
 
         try:
             await voice_lobby.handle_voice_state_update(payload)

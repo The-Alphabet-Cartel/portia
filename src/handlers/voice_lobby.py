@@ -21,9 +21,12 @@ fluxer-py sends on_voice_state_update as a single raw dict with:
   - user_id: str
   - member.user.username: str
   - member.user.global_name: str
+
+Channel creation and member moves use direct HTTP calls to the Fluxer API
+because fluxer-py's Guild object does not expose these methods.
 ----------------------------------------------------------------------------
-FILE VERSION: v1.3.0
-LAST MODIFIED: 2026-02-24
+FILE VERSION: v1.4.0
+LAST MODIFIED: 2026-02-25
 BOT: portia-bot
 CLEAN ARCHITECTURE: Compliant
 Repository: https://github.com/PapaBearDoes/bragi
@@ -31,9 +34,11 @@ Repository: https://github.com/PapaBearDoes/bragi
 """
 
 import asyncio
+import time
 import traceback
 from typing import Any, Optional
 
+import httpx
 import fluxer
 
 
@@ -58,6 +63,32 @@ class VoiceLobbyHandler:
 
         # Timers for empty-channel cleanup: {channel_id_int: asyncio.Task}
         self._cleanup_timers: dict[int, asyncio.Task] = {}
+
+        # Dedup guard: {user_id: timestamp} — prevents double-fire
+        self._recent_lobby_joins: dict[str, float] = {}
+        self._dedup_window = 5.0  # seconds
+
+        # HTTP client for direct API calls
+        self._http: Optional[httpx.AsyncClient] = None
+
+        # Resolve API base URL from bot
+        self._api_url = getattr(bot, "api_url", "https://api.fluxer.app/v1")
+        if isinstance(self._api_url, str) and self._api_url.endswith("/"):
+            self._api_url = self._api_url.rstrip("/")
+        self._log.debug(f"API base URL: {self._api_url}")
+
+    def set_token(self, token: str) -> None:
+        """Set the bot token for authenticated HTTP requests."""
+        self._http = httpx.AsyncClient(
+            base_url=self._api_url,
+            headers={
+                "Authorization": f"Bot {token}",
+                "Content-Type": "application/json",
+            },
+            timeout=15.0,
+        )
+        self._log.debug("HTTP client initialised with bot token")
+
     # -------------------------------------------------------------------------
     # Config helpers
     # -------------------------------------------------------------------------
@@ -93,6 +124,20 @@ class VoiceLobbyHandler:
         member = payload.get("member", {})
         user = member.get("user", {})
         return user.get("global_name") or user.get("username") or "unknown"
+
+    # -------------------------------------------------------------------------
+    # Dedup guard
+    # -------------------------------------------------------------------------
+    def _is_duplicate_lobby_join(self, user_id: str) -> bool:
+        """Prevent double-fire of lobby join events."""
+        now = time.monotonic()
+        last = self._recent_lobby_joins.get(user_id, 0.0)
+        if now - last < self._dedup_window:
+            self._log.debug(f"Dedup: ignoring duplicate lobby join for {user_id}")
+            return True
+        self._recent_lobby_joins[user_id] = now
+        return False
+
     # -------------------------------------------------------------------------
     # Voice state update handler
     # -------------------------------------------------------------------------
@@ -117,15 +162,15 @@ class VoiceLobbyHandler:
 
         # Scenario 1: User joined the lobby
         if channel_id and channel_id == lobby_id:
-            await self._handle_lobby_join(
-                guild_id=guild_id,
-                user_id=user_id,
-                username=username,
-            )
+            if not self._is_duplicate_lobby_join(user_id):
+                await self._handle_lobby_join(
+                    guild_id=guild_id,
+                    user_id=user_id,
+                    username=username,
+                )
+
         # Scenario 2: User disconnected (channel_id is null)
-        # We don't know WHICH channel they left from this payload alone.
-        # The sweep handler will catch orphaned empty channels.
-        # But we can check all tracked channels on disconnect events.
+        # Check all tracked channels for emptiness
         if channel_id is None:
             await self._check_all_tracked_channels()
 
@@ -141,6 +186,7 @@ class VoiceLobbyHandler:
         for channel_id_str in list(tracked.keys()):
             channel_id_int = int(channel_id_str)
             await self._handle_temp_channel_leave(channel_id_int)
+
     # -------------------------------------------------------------------------
     # Lobby join → create temp channel and move user
     # -------------------------------------------------------------------------
@@ -148,84 +194,41 @@ class VoiceLobbyHandler:
         self, guild_id: str, user_id: str, username: str
     ) -> None:
         """Create a temporary VC for the user and move them into it."""
+        if not self._http:
+            self._log.error("HTTP client not initialised — call set_token() first")
+            return
+
         channel_name = self._channel_name_format().replace("{username}", username)
         self._log.info(f"Creating temp VC '{channel_name}' for {username}")
 
         try:
-            guild = await self._bot.fetch_guild(int(guild_id))
-
-            # --- Channel creation (API discovery) ---
-            # Try guild.create_voice_channel() first (discord.py pattern).
-            # If that doesn't exist, try variations and log what's available.
-            create_kwargs: dict[str, Any] = {"name": channel_name}
+            # --- Create voice channel via REST API ---
+            # Channel type 2 = voice (Discord-compatible convention)
+            create_payload: dict[str, Any] = {
+                "name": channel_name,
+                "type": 2,
+            }
             category_id = self._category_id()
             if category_id:
-                create_kwargs["category"] = int(category_id)
+                create_payload["parent_id"] = category_id
 
-            new_channel = None
-            new_channel_id = None
-            # Attempt 1: guild.create_voice_channel()
-            if hasattr(guild, "create_voice_channel"):
-                self._log.debug("Using guild.create_voice_channel()")
-                new_channel = await guild.create_voice_channel(**create_kwargs)
-            # Attempt 2: guild.create_channel() with type parameter
-            elif hasattr(guild, "create_channel"):
-                self._log.debug("Using guild.create_channel() with type=voice")
-                new_channel = await guild.create_channel(
-                    type="voice", **create_kwargs
-                )
-            # Attempt 3: Use bot's HTTP client directly
-            elif hasattr(self._bot, "http"):
-                http = self._bot.http
-                self._log.info(
-                    f"Using bot.http for channel creation. "
-                    f"http type: {type(http).__name__}, "
-                    f"http attrs: {[a for a in dir(http) if not a.startswith('_')]}"
-                )
-                # Try common HTTP client patterns
-                if hasattr(http, "create_channel"):
-                    new_channel = await http.create_channel(
-                        int(guild_id), name=channel_name, type=2,
-                        parent_id=int(category_id) if category_id else None,
-                    )
-                elif hasattr(http, "request"):
-                    # Raw request pattern: POST /guilds/{id}/channels
-                    payload_data = {"name": channel_name, "type": 2}
-                    if category_id:
-                        payload_data["parent_id"] = str(category_id)
-                    new_channel = await http.request(
-                        "POST", f"/guilds/{guild_id}/channels", json=payload_data
-                    )
-                else:
-                    self._log.error(
-                        f"bot.http exists but no usable method found.\n"
-                        f"  http attrs: {[a for a in dir(http) if not a.startswith('_')]}"
-                    )
-                    return
-            else:
-                # Log everything available on bot for discovery
-                bot_attrs = [a for a in dir(self._bot) if not a.startswith("_")]
+            resp = await self._http.post(
+                f"/guilds/{guild_id}/channels",
+                json=create_payload,
+            )
+
+            if resp.status_code >= 400:
                 self._log.error(
-                    f"Cannot find any channel creation path.\n"
-                    f"  guild create methods: {[a for a in dir(guild) if not a.startswith('_') and 'create' in a.lower()]}\n"
-                    f"  bot attrs: {bot_attrs}"
+                    f"Channel creation failed: {resp.status_code} {resp.text}"
                 )
                 return
 
-            if new_channel is None:
-                self._log.error("Channel creation returned None")
-                return
-            # Extract channel ID — might be object or dict
-            if isinstance(new_channel, dict):
-                new_channel_id = int(new_channel.get("id", 0))
-            else:
-                new_channel_id = int(getattr(new_channel, "id", 0))
+            channel_data = resp.json()
+            new_channel_id = int(channel_data.get("id", 0))
 
             if not new_channel_id:
                 self._log.error(
-                    f"Could not extract ID from new channel: "
-                    f"type={type(new_channel).__name__}, "
-                    f"value={new_channel!r:.300}"
+                    f"Channel creation returned no ID: {channel_data}"
                 )
                 return
 
@@ -237,57 +240,29 @@ class VoiceLobbyHandler:
             self._tracker.track(
                 new_channel_id, int(user_id), username, int(guild_id)
             )
-            # --- Move user to the new channel (API discovery) ---
-            # Try multiple patterns for moving a user between voice channels
-            member = await guild.fetch_member(int(user_id))
-            moved = False
 
-            # Attempt 1: member.move_to(channel)
-            if hasattr(member, "move_to"):
-                self._log.debug("Using member.move_to()")
-                await member.move_to(new_channel)
-                moved = True
-            # Attempt 2: member.edit(voice_channel=channel)
-            elif hasattr(member, "edit"):
-                self._log.debug("Using member.edit(voice_channel=...)")
-                await member.edit(voice_channel=new_channel)
-                moved = True
-            # Attempt 3: guild.move_member(member, channel)
-            elif hasattr(guild, "move_member"):
-                self._log.debug("Using guild.move_member()")
-                await guild.move_member(member, new_channel)
-                moved = True
-            else:
-                member_methods = [
-                    a for a in dir(member)
-                    if not a.startswith("_")
-                    and ("move" in a.lower() or "edit" in a.lower() or "voice" in a.lower())
-                ]
-                all_member_methods = [a for a in dir(member) if not a.startswith("_")]
+            # --- Move user to the new channel via REST API ---
+            # PATCH /guilds/{guild_id}/members/{user_id} with channel_id
+            move_resp = await self._http.patch(
+                f"/guilds/{guild_id}/members/{user_id}",
+                json={"channel_id": str(new_channel_id)},
+            )
+
+            if move_resp.status_code >= 400:
                 self._log.error(
-                    f"Cannot find move method.\n"
-                    f"  Member move/edit/voice methods: {member_methods}\n"
-                    f"  All member attrs: {all_member_methods}"
+                    f"Member move failed: {move_resp.status_code} {move_resp.text}"
                 )
-            if moved:
+            else:
                 self._log.info(f"Moved {username} into '{channel_name}'")
 
-        except AttributeError as e:
-            self._log.error(
-                f"API shape mismatch during channel creation/move: {e}\n"
-                f"{traceback.format_exc()}"
-            )
-        except fluxer.Forbidden:
-            self._log.error(
-                "Missing permissions to create voice channel or move member"
-            )
-        except fluxer.HTTPException as e:
-            self._log.error(f"Fluxer API error during lobby join: {e}")
+        except httpx.HTTPError as e:
+            self._log.error(f"HTTP error during lobby join: {e}")
         except Exception as e:
             self._log.error(
                 f"Unexpected error during lobby join: {e}\n"
                 f"{traceback.format_exc()}"
             )
+
     # -------------------------------------------------------------------------
     # Temp channel leave → schedule cleanup if empty
     # -------------------------------------------------------------------------
@@ -299,58 +274,53 @@ class VoiceLobbyHandler:
         if not entry:
             return
 
+        if not self._http:
+            return
+
         try:
-            guild = await self._bot.fetch_guild(entry["guild_id"])
+            # Fetch channel details via REST API
+            resp = await self._http.get(
+                f"/channels/{channel_id}"
+            )
 
-            # Try to fetch the channel
-            channel = None
-            if hasattr(guild, "fetch_channel"):
-                channel = await guild.fetch_channel(channel_id)
-            else:
-                self._log.debug(
-                    f"guild has no fetch_channel — "
-                    f"guild attrs: {[a for a in dir(guild) if not a.startswith('_')]}"
-                )
-
-            if channel is None:
-                # Can't verify — let sweep handle it
+            if resp.status_code == 404:
+                self._log.info(f"Channel {channel_id} already gone — untracking")
+                self._tracker.untrack(channel_id)
                 return
-            # Determine member count — try multiple attributes
+
+            if resp.status_code >= 400:
+                self._log.error(
+                    f"Error fetching channel {channel_id}: "
+                    f"{resp.status_code} {resp.text}"
+                )
+                return
+
+            channel_data = resp.json()
+
+            # Determine member count from channel data
+            # Look for voice_states, members, or recipient count
             member_count = 0
-            if isinstance(channel, dict):
-                # Raw dict response
-                members = channel.get("members", channel.get("voice_states", []))
-                member_count = len(members) if members else 0
+            voice_states = channel_data.get("voice_states", [])
+            if voice_states:
+                member_count = len(voice_states)
             else:
-                members = getattr(channel, "members", None)
-                voice_states = getattr(channel, "voice_states", None)
-                if members is not None:
+                members = channel_data.get("members", [])
+                if members:
                     member_count = len(members)
-                elif voice_states is not None:
-                    member_count = len(voice_states)
-                else:
-                    self._log.debug(
-                        f"Channel {channel_id} — cannot determine members, "
-                        f"type={type(channel).__name__}, "
-                        f"attrs={[a for a in dir(channel) if not a.startswith('_')]}"
-                    )
-                    # Assume empty — worst case, sweep catches it
-                    member_count = 0
+
+            self._log.debug(
+                f"Channel {channel_id} has {member_count} member(s) "
+                f"(keys: {list(channel_data.keys())})"
+            )
 
             if member_count > 0:
-                self._log.debug(
-                    f"Channel {channel_id} still has {member_count} member(s)"
-                )
                 return
 
             # Channel is empty — start cleanup timer
             self._start_cleanup_timer(channel_id, timeout)
-        except fluxer.HTTPException as e:
-            if "404" in str(e) or "Unknown Channel" in str(e):
-                self._log.info(f"Channel {channel_id} already gone — untracking")
-                self._tracker.untrack(channel_id)
-            else:
-                self._log.error(f"Error checking channel {channel_id}: {e}")
+
+        except httpx.HTTPError as e:
+            self._log.error(f"HTTP error checking channel {channel_id}: {e}")
         except Exception as e:
             self._log.error(
                 f"Unexpected error checking channel {channel_id}: {e}\n"
@@ -375,6 +345,7 @@ class VoiceLobbyHandler:
         if task and not task.done():
             task.cancel()
             self._log.debug(f"Cancelled cleanup timer for channel {channel_id}")
+
     async def _cleanup_after_delay(self, channel_id: int, timeout: int) -> None:
         """Wait, then delete the channel if still empty."""
         try:
@@ -394,33 +365,33 @@ class VoiceLobbyHandler:
         if not entry:
             return
 
-        try:
-            guild = await self._bot.fetch_guild(entry["guild_id"])
-            channel = await guild.fetch_channel(channel_id)
+        if not self._http:
+            return
 
-            if hasattr(channel, "delete"):
-                await channel.delete(reason="Portia: temp VC empty — cleaning up")
-            else:
-                self._log.error(
-                    f"Channel object has no delete method — "
-                    f"type={type(channel).__name__}, "
-                    f"attrs={[a for a in dir(channel) if not a.startswith('_')]}"
-                )
-                return
-            self._tracker.untrack(channel_id)
-            self._cleanup_timers.pop(channel_id, None)
-            self._log.success(  # type: ignore[attr-defined]
-                f"Deleted empty temp VC {channel_id} "
-                f"(was: {entry['owner_name']}'s VC)"
+        try:
+            resp = await self._http.delete(
+                f"/channels/{channel_id}"
             )
 
-        except fluxer.HTTPException as e:
-            if "404" in str(e) or "Unknown Channel" in str(e):
+            if resp.status_code == 404:
                 self._log.info(f"Channel {channel_id} already gone — untracking")
-                self._tracker.untrack(channel_id)
-                self._cleanup_timers.pop(channel_id, None)
+            elif resp.status_code >= 400:
+                self._log.error(
+                    f"Failed to delete channel {channel_id}: "
+                    f"{resp.status_code} {resp.text}"
+                )
+                return
             else:
-                self._log.error(f"Failed to delete channel {channel_id}: {e}")
+                self._log.success(  # type: ignore[attr-defined]
+                    f"Deleted empty temp VC {channel_id} "
+                    f"(was: {entry['owner_name']}'s VC)"
+                )
+
+            self._tracker.untrack(channel_id)
+            self._cleanup_timers.pop(channel_id, None)
+
+        except httpx.HTTPError as e:
+            self._log.error(f"HTTP error deleting channel {channel_id}: {e}")
         except Exception as e:
             self._log.error(
                 f"Unexpected error deleting channel {channel_id}: {e}\n"
