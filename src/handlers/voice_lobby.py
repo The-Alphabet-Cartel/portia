@@ -236,26 +236,75 @@ class VoiceLobbyHandler:
             # Track the channel
             self._tracker.track(new_channel_id, int(user_id), username, int(guild_id))
 
-            # --- Move user to the new channel via REST API ---
-            # PATCH /guilds/{guild_id}/members/{user_id} with channel_id
-            move_url = f"/guilds/{guild_id}/members/{user_id}"
-            move_payload = {"channel_id": str(new_channel_id)}
-            self._log.debug(
-                f"Move request: PATCH {self._api_url}{move_url} payload={move_payload}"
-            )
-            move_resp = await self._http.patch(move_url, json=move_payload)
+            # --- Move user to the new channel ---
+            # HTTP PATCH failed with 403, so try fluxer-py's own methods
+            # and discover what works
+            moved = False
 
-            if move_resp.status_code >= 400:
-                self._log.error(
-                    f"Member move failed: PATCH {move_url} → "
-                    f"{move_resp.status_code} {move_resp.text}"
-                )
-                # Discovery: try alternate auth format
-                self._log.debug(
-                    f"Auth header: {self._http.headers.get('Authorization', '')[:20]}..."
-                )
-            else:
+            # Attempt 1: bot.fetch_channel + guild.fetch_member + member methods
+            try:
+                guild = await self._bot.fetch_guild(int(guild_id))
+                member = await guild.fetch_member(int(user_id))
+                member_attrs = [a for a in dir(member) if not a.startswith("_")]
+                self._log.debug(f"Member attrs: {member_attrs}")
+
+                if hasattr(member, "move_to"):
+                    new_ch = await self._bot.fetch_channel(new_channel_id)
+                    await member.move_to(new_ch)
+                    moved = True
+                elif hasattr(member, "edit"):
+                    await member.edit(channel_id=new_channel_id)
+                    moved = True
+                elif hasattr(member, "modify"):
+                    await member.modify(channel_id=new_channel_id)
+                    moved = True
+            except Exception as e:
+                self._log.debug(f"fluxer-py member move attempt failed: {e}")
+
+            # Attempt 2: Try different HTTP endpoints
+            if not moved:
+                alt_endpoints = [
+                    (
+                        "PATCH",
+                        f"/guilds/{guild_id}/members/{user_id}",
+                        {"channel_id": str(new_channel_id)},
+                    ),
+                    (
+                        "PATCH",
+                        f"/guilds/{guild_id}/members/{user_id}/voice",
+                        {"channel_id": str(new_channel_id)},
+                    ),
+                    (
+                        "PUT",
+                        f"/guilds/{guild_id}/members/{user_id}",
+                        {"channel_id": str(new_channel_id)},
+                    ),
+                    (
+                        "POST",
+                        f"/guilds/{guild_id}/members/{user_id}/move",
+                        {"channel_id": str(new_channel_id)},
+                    ),
+                ]
+                for method, url, payload in alt_endpoints:
+                    try:
+                        resp = await self._http.request(method, url, json=payload)
+                        self._log.debug(
+                            f"Move attempt {method} {url} → {resp.status_code} {resp.text[:200]}"
+                        )
+                        if resp.status_code < 400:
+                            moved = True
+                            self._log.info(f"Moved {username} via {method} {url}")
+                            break
+                    except Exception as e:
+                        self._log.debug(f"Move attempt {method} {url} failed: {e}")
+
+            if moved:
                 self._log.info(f"Moved {username} into '{channel_name}'")
+            else:
+                self._log.error(
+                    f"All move attempts failed for {username}. "
+                    f"Channel '{channel_name}' ({new_channel_id}) created but user not moved."
+                )
 
         except httpx.HTTPError as e:
             self._log.error(f"HTTP error during lobby join: {e}")
@@ -279,8 +328,29 @@ class VoiceLobbyHandler:
             return
 
         try:
-            # Fetch channel details via REST API
-            resp = await self._http.get(f"/channels/{channel_id}")
+            # Fetch channel via fluxer-py first, fall back to HTTP
+            resp = None
+            channel_data = None
+            try:
+                ch = await self._bot.fetch_channel(channel_id)
+                if isinstance(ch, dict):
+                    channel_data = ch
+                else:
+                    channel_data = {
+                        "id": getattr(ch, "id", channel_id),
+                        "voice_states": getattr(ch, "voice_states", []),
+                        "members": getattr(ch, "members", []),
+                    }
+                    self._log.debug(
+                        f"fetch_channel returned type={type(ch).__name__}, "
+                        f"attrs={[a for a in dir(ch) if not a.startswith('_')]}"
+                    )
+            except Exception as e:
+                self._log.debug(f"bot.fetch_channel({channel_id}) failed: {e}")
+
+            # Fall back to HTTP if fluxer-py didn't work
+            if channel_data is None:
+                resp = await self._http.get(f"/channels/{channel_id}")
 
             if resp.status_code == 404:
                 self._log.info(f"Channel {channel_id} already gone — untracking")
