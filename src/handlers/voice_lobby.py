@@ -249,25 +249,23 @@ class VoiceLobbyHandler:
                 self._log.debug(f"Member attrs: {member_attrs}")
 
                 if hasattr(member, "edit"):
-                    # member.edit() requires guild_id as keyword arg
-                    # Try channel_id first, then voice_channel_id
                     try:
                         await member.edit(
                             guild_id=int(guild_id),
-                            channel_id=str(new_channel_id),
+                            channel_id=int(new_channel_id),
                         )
                         moved = True
-                    except TypeError as te:
-                        self._log.debug(f"member.edit with channel_id failed: {te}")
+                    except Exception as e1:
+                        self._log.debug(f"member.edit(channel_id=int) failed: {e1}")
                         try:
                             await member.edit(
                                 guild_id=int(guild_id),
-                                voice_channel_id=str(new_channel_id),
+                                voice_channel=int(new_channel_id),
                             )
                             moved = True
-                        except TypeError as te2:
+                        except Exception as e2:
                             self._log.debug(
-                                f"member.edit with voice_channel_id failed: {te2}"
+                                f"member.edit(voice_channel=int) failed: {e2}"
                             )
                 elif hasattr(member, "move_to"):
                     new_ch = await self._bot.fetch_channel(new_channel_id)
