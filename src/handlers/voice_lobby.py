@@ -22,10 +22,13 @@ fluxer-py sends on_voice_state_update as a single raw dict with:
   - member.user.username: str
   - member.user.global_name: str
 
-Channel creation and member moves use direct HTTP calls to the Fluxer API
-because fluxer-py's Guild object does not expose these methods.
+Channel creation uses direct HTTP calls to the Fluxer API because
+fluxer-py's Guild object does not expose a create_voice_channel method.
+Member moves use fluxer-py's member.edit() with guild_id kwarg.
+Emptiness detection uses in-memory occupancy tracking from gateway events
+because fetch_channel does not return voice state / member data.
 ----------------------------------------------------------------------------
-FILE VERSION: v1.4.0
+FILE VERSION: v1.7.0
 LAST MODIFIED: 2026-02-25
 BOT: portia-bot
 CLEAN ARCHITECTURE: Compliant
@@ -64,11 +67,14 @@ class VoiceLobbyHandler:
         # Timers for empty-channel cleanup: {channel_id_int: asyncio.Task}
         self._cleanup_timers: dict[int, asyncio.Task] = {}
 
+        # Track who is in each temp channel: {channel_id_int: set of user_id strings}
+        self._channel_occupants: dict[int, set[str]] = {}
+
         # Dedup guard: {user_id: timestamp} — prevents double-fire
         self._recent_lobby_joins: dict[str, float] = {}
         self._dedup_window = 5.0  # seconds
 
-        # HTTP client for direct API calls
+        # HTTP client for direct API calls (channel creation)
         self._http: Optional[httpx.AsyncClient] = None
 
         # Resolve API base URL — bot.api_url may be None before connection
@@ -144,9 +150,10 @@ class VoiceLobbyHandler:
         """Called by the main.py dispatcher on every voice state change.
 
         Payload is a raw dict from fluxer-py's gateway. We handle:
-        1. User JOINS the lobby channel → create temp VC and move them
-        2. User LEAVES a tracked temp channel → start cleanup timer if empty
-        3. User JOINS a tracked temp channel → cancel any pending cleanup
+        1. Update in-memory occupancy tracking for all tracked channels
+        2. If user left a tracked channel and it's now empty → start timer
+        3. If user joined a tracked channel → cancel any pending timer
+        4. If user joined the lobby → create temp VC and move them
         """
         channel_id = self._get_channel_id(payload)
         guild_id = self._get_guild_id(payload)
@@ -159,7 +166,49 @@ class VoiceLobbyHandler:
             f"channel={channel_id or 'disconnected'}"
         )
 
-        # Scenario 1: User joined the lobby
+        # -----------------------------------------------------------------
+        # Step 1: Update occupancy tracking
+        # -----------------------------------------------------------------
+
+        # Remove user from whatever tracked channel they were previously in
+        previous_channel: Optional[int] = None
+        for ch_id, occupants in self._channel_occupants.items():
+            if user_id in occupants:
+                previous_channel = ch_id
+                occupants.discard(user_id)
+                break
+
+        # Determine the current channel as int (if any)
+        current_channel_int: Optional[int] = None
+        if channel_id:
+            current_channel_int = int(channel_id)
+
+        # Add user to the channel they just joined (if it's tracked)
+        if current_channel_int and self._tracker.is_tracked(current_channel_int):
+            self._channel_occupants.setdefault(current_channel_int, set()).add(user_id)
+            self._cancel_cleanup_timer(current_channel_int)
+            self._log.debug(
+                f"Channel {current_channel_int} occupants: "
+                f"{len(self._channel_occupants[current_channel_int])}"
+            )
+
+        # -----------------------------------------------------------------
+        # Step 2: Check if user left a tracked channel that is now empty
+        # -----------------------------------------------------------------
+        if previous_channel and previous_channel != current_channel_int:
+            occupants = self._channel_occupants.get(previous_channel, set())
+            if len(occupants) == 0:
+                timeout = self._empty_timeout()
+                self._start_cleanup_timer(previous_channel, timeout)
+            else:
+                self._log.debug(
+                    f"Channel {previous_channel} still has "
+                    f"{len(occupants)} occupant(s)"
+                )
+
+        # -----------------------------------------------------------------
+        # Step 3: User joined the lobby → create temp VC and move them
+        # -----------------------------------------------------------------
         if channel_id and channel_id == lobby_id:
             if not self._is_duplicate_lobby_join(user_id):
                 await self._handle_lobby_join(
@@ -167,24 +216,6 @@ class VoiceLobbyHandler:
                     user_id=user_id,
                     username=username,
                 )
-
-        # Scenario 2: User disconnected (channel_id is null)
-        # Check all tracked channels for emptiness
-        if channel_id is None:
-            await self._check_all_tracked_channels()
-
-        # Scenario 3: User joined a tracked temp channel → cancel cleanup
-        if channel_id:
-            channel_id_int = int(channel_id)
-            if self._tracker.is_tracked(channel_id_int):
-                self._cancel_cleanup_timer(channel_id_int)
-
-    async def _check_all_tracked_channels(self) -> None:
-        """After a disconnect, check all tracked channels for emptiness."""
-        tracked = self._tracker.get_all()
-        for channel_id_str in list(tracked.keys()):
-            channel_id_int = int(channel_id_str)
-            await self._handle_temp_channel_leave(channel_id_int)
 
     # -------------------------------------------------------------------------
     # Lobby join → create temp channel and move user
@@ -226,7 +257,9 @@ class VoiceLobbyHandler:
             new_channel_id = int(channel_data.get("id", 0))
 
             if not new_channel_id:
-                self._log.error(f"Channel creation returned no ID: {channel_data}")
+                self._log.error(
+                    f"Channel creation returned no ID: {channel_data}"
+                )
                 return
 
             self._log.success(  # type: ignore[attr-defined]
@@ -234,171 +267,52 @@ class VoiceLobbyHandler:
             )
 
             # Track the channel
-            self._tracker.track(new_channel_id, int(user_id), username, int(guild_id))
+            self._tracker.track(
+                new_channel_id, int(user_id), username, int(guild_id)
+            )
 
-            # --- Move user to the new channel ---
-            # HTTP PATCH failed with 403, so try fluxer-py's own methods
-            # and discover what works
+            # Seed occupancy — user will be moved here momentarily
+            self._channel_occupants.setdefault(new_channel_id, set()).add(user_id)
+
+            # --- Move user via fluxer-py member.edit() ---
+            guild = await self._bot.fetch_guild(int(guild_id))
+            member = await guild.fetch_member(int(user_id))
+
             moved = False
-
-            # Attempt 1: bot.fetch_channel + guild.fetch_member + member methods
-            try:
-                guild = await self._bot.fetch_guild(int(guild_id))
-                member = await guild.fetch_member(int(user_id))
-                member_attrs = [a for a in dir(member) if not a.startswith("_")]
-                self._log.debug(f"Member attrs: {member_attrs}")
-
-                if hasattr(member, "edit"):
+            if hasattr(member, "edit"):
+                try:
+                    await member.edit(
+                        guild_id=int(guild_id),
+                        channel_id=int(new_channel_id),
+                    )
+                    moved = True
+                except Exception as e1:
+                    self._log.debug(f"member.edit(channel_id=int) failed: {e1}")
                     try:
                         await member.edit(
                             guild_id=int(guild_id),
-                            channel_id=int(new_channel_id),
+                            channel_id=str(new_channel_id),
                         )
                         moved = True
-                    except Exception as e1:
-                        self._log.debug(f"member.edit(channel_id=int) failed: {e1}")
-                        try:
-                            await member.edit(
-                                guild_id=int(guild_id),
-                                voice_channel=int(new_channel_id),
-                            )
-                            moved = True
-                        except Exception as e2:
-                            self._log.debug(
-                                f"member.edit(voice_channel=int) failed: {e2}"
-                            )
-                elif hasattr(member, "move_to"):
-                    new_ch = await self._bot.fetch_channel(new_channel_id)
-                    await member.move_to(new_ch)
-                    moved = True
-
-            except Exception as e:
-                self._log.debug(f"fluxer-py member move attempt failed: {e}")
-
-            # Attempt 2: Try different HTTP endpoints
-            if not moved:
-                alt_endpoints = [
-                    (
-                        "PATCH",
-                        f"/guilds/{guild_id}/members/{user_id}",
-                        {"channel_id": str(new_channel_id)},
-                    ),
-                    (
-                        "PATCH",
-                        f"/guilds/{guild_id}/members/{user_id}/voice",
-                        {"channel_id": str(new_channel_id)},
-                    ),
-                    (
-                        "PUT",
-                        f"/guilds/{guild_id}/members/{user_id}",
-                        {"channel_id": str(new_channel_id)},
-                    ),
-                    (
-                        "POST",
-                        f"/guilds/{guild_id}/members/{user_id}/move",
-                        {"channel_id": str(new_channel_id)},
-                    ),
-                ]
-                for method, url, payload in alt_endpoints:
-                    try:
-                        resp = await self._http.request(method, url, json=payload)
+                    except Exception as e2:
                         self._log.debug(
-                            f"Move attempt {method} {url} → {resp.status_code} {resp.text[:200]}"
+                            f"member.edit(channel_id=str) failed: {e2}"
                         )
-                        if resp.status_code < 400:
-                            moved = True
-                            self._log.info(f"Moved {username} via {method} {url}")
-                            break
-                    except Exception as e:
-                        self._log.debug(f"Move attempt {method} {url} failed: {e}")
 
             if moved:
                 self._log.info(f"Moved {username} into '{channel_name}'")
             else:
                 self._log.error(
-                    f"All move attempts failed for {username}. "
-                    f"Channel '{channel_name}' ({new_channel_id}) created but user not moved."
+                    f"Failed to move {username}. "
+                    f"Channel '{channel_name}' ({new_channel_id}) created "
+                    f"but user not moved."
                 )
 
         except httpx.HTTPError as e:
             self._log.error(f"HTTP error during lobby join: {e}")
         except Exception as e:
             self._log.error(
-                f"Unexpected error during lobby join: {e}\n{traceback.format_exc()}"
-            )
-
-    # -------------------------------------------------------------------------
-    # Temp channel leave → schedule cleanup if empty
-    # -------------------------------------------------------------------------
-    async def _handle_temp_channel_leave(self, channel_id: int) -> None:
-        """Check if a tracked temp channel is now empty, schedule deletion."""
-        timeout = self._empty_timeout()
-
-        entry = self._tracker.get_all().get(str(channel_id))
-        if not entry:
-            return
-
-        try:
-            # Try fluxer-py's fetch_channel first
-            channel_data = None
-            try:
-                ch = await self._bot.fetch_channel(channel_id)
-                if isinstance(ch, dict):
-                    channel_data = ch
-                else:
-                    ch_attrs = [a for a in dir(ch) if not a.startswith("_")]
-                    self._log.debug(
-                        f"fetch_channel type={type(ch).__name__}, attrs={ch_attrs}"
-                    )
-                    channel_data = {"id": channel_id}
-                    for key in ["voice_states", "members", "member_count"]:
-                        val = getattr(ch, key, None)
-                        if val is not None:
-                            channel_data[key] = val
-            except Exception as e:
-                self._log.debug(f"bot.fetch_channel({channel_id}) failed: {e}")
-
-            # Fall back to HTTP only if fluxer-py didn't work
-            if channel_data is None and self._http:
-                resp = await self._http.get(f"/channels/{channel_id}")
-                if resp.status_code == 404:
-                    self._log.info(f"Channel {channel_id} already gone — untracking")
-                    self._tracker.untrack(channel_id)
-                    return
-                if resp.status_code >= 400:
-                    self._log.error(
-                        f"Error fetching channel {channel_id}: "
-                        f"{resp.status_code} {resp.text}"
-                    )
-                    return
-                channel_data = resp.json()
-
-            if channel_data is None:
-                return
-
-            # Determine member count
-            member_count = 0
-            voice_states = channel_data.get("voice_states", [])
-            if voice_states:
-                member_count = len(voice_states)
-            else:
-                members = channel_data.get("members", [])
-                if members:
-                    member_count = len(members)
-
-            self._log.debug(
-                f"Channel {channel_id} has {member_count} member(s) "
-                f"(keys: {list(channel_data.keys())})"
-            )
-
-            if member_count > 0:
-                return
-
-            self._start_cleanup_timer(channel_id, timeout)
-
-        except Exception as e:
-            self._log.error(
-                f"Unexpected error checking channel {channel_id}: {e}\n"
+                f"Unexpected error during lobby join: {e}\n"
                 f"{traceback.format_exc()}"
             )
 
@@ -425,12 +339,23 @@ class VoiceLobbyHandler:
         """Wait, then delete the channel if still empty."""
         try:
             await asyncio.sleep(timeout)
+
+            # Double-check occupancy before deleting
+            occupants = self._channel_occupants.get(channel_id, set())
+            if len(occupants) > 0:
+                self._log.debug(
+                    f"Channel {channel_id} no longer empty "
+                    f"({len(occupants)} occupants) — skipping delete"
+                )
+                return
+
             await self._delete_temp_channel(channel_id)
         except asyncio.CancelledError:
             pass  # Timer was cancelled because someone joined
         except Exception as e:
             self._log.error(
-                f"Cleanup task error for {channel_id}: {e}\n{traceback.format_exc()}"
+                f"Cleanup task error for {channel_id}: {e}\n"
+                f"{traceback.format_exc()}"
             )
 
     async def _delete_temp_channel(self, channel_id: int) -> None:
@@ -461,6 +386,7 @@ class VoiceLobbyHandler:
 
             self._tracker.untrack(channel_id)
             self._cleanup_timers.pop(channel_id, None)
+            self._channel_occupants.pop(channel_id, None)
 
         except httpx.HTTPError as e:
             self._log.error(f"HTTP error deleting channel {channel_id}: {e}")
