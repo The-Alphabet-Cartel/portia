@@ -63,7 +63,7 @@ class ConfigManager:
         env_map = {
             "LOG_LEVEL": ("logging", "level"),
             "LOG_FORMAT": ("logging", "format"),
-            "LOG_FILE": ("logging", "file"),
+            "PORTIA_LOG_FILE": ("logging", "file"),
             "LOG_CONSOLE": ("logging", "console"),
             "COMMAND_PREFIX": ("bot", "command_prefix"),
             "GUILD_ID": ("bot", "guild_id"),
