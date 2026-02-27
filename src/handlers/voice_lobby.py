@@ -28,8 +28,8 @@ Member moves use fluxer-py's member.edit() with guild_id kwarg.
 Emptiness detection uses in-memory occupancy tracking from gateway events
 because fetch_channel does not return voice state / member data.
 ----------------------------------------------------------------------------
-FILE VERSION: v1.7.0
-LAST MODIFIED: 2026-02-25
+FILE VERSION: v1.8.0
+LAST MODIFIED: 2026-02-26
 BOT: portia-bot
 CLEAN ARCHITECTURE: Compliant
 Repository: https://github.com/PapaBearDoes/bragi
@@ -73,6 +73,11 @@ class VoiceLobbyHandler:
         # Dedup guard: {user_id: timestamp} — prevents double-fire
         self._recent_lobby_joins: dict[str, float] = {}
         self._dedup_window = 5.0  # seconds
+
+        # Grace period: {channel_id_int: timestamp} — don't schedule deletion
+        # for channels that were just created (move causes a brief disconnect)
+        self._creation_timestamps: dict[int, float] = {}
+        self._creation_grace_period = 15.0  # seconds
 
         # HTTP client for direct API calls (channel creation)
         self._http: Optional[httpx.AsyncClient] = None
@@ -198,8 +203,17 @@ class VoiceLobbyHandler:
         if previous_channel and previous_channel != current_channel_int:
             occupants = self._channel_occupants.get(previous_channel, set())
             if len(occupants) == 0:
-                timeout = self._empty_timeout()
-                self._start_cleanup_timer(previous_channel, timeout)
+                # Check grace period — the move causes a brief disconnect
+                # so don't schedule deletion for freshly created channels
+                created_at = self._creation_timestamps.get(previous_channel, 0.0)
+                if time.monotonic() - created_at < self._creation_grace_period:
+                    self._log.debug(
+                        f"Channel {previous_channel} empty but within grace "
+                        f"period — skipping cleanup timer"
+                    )
+                else:
+                    timeout = self._empty_timeout()
+                    self._start_cleanup_timer(previous_channel, timeout)
             else:
                 self._log.debug(
                     f"Channel {previous_channel} still has "
@@ -273,6 +287,9 @@ class VoiceLobbyHandler:
 
             # Seed occupancy — user will be moved here momentarily
             self._channel_occupants.setdefault(new_channel_id, set()).add(user_id)
+
+            # Record creation time for grace period
+            self._creation_timestamps[new_channel_id] = time.monotonic()
 
             # --- Move user via fluxer-py member.edit() ---
             guild = await self._bot.fetch_guild(int(guild_id))
@@ -387,6 +404,7 @@ class VoiceLobbyHandler:
             self._tracker.untrack(channel_id)
             self._cleanup_timers.pop(channel_id, None)
             self._channel_occupants.pop(channel_id, None)
+            self._creation_timestamps.pop(channel_id, None)
 
         except httpx.HTTPError as e:
             self._log.error(f"HTTP error deleting channel {channel_id}: {e}")

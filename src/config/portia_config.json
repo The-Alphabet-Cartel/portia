@@ -60,7 +60,7 @@
       },
       "empty_timeout": {
         "type": "integer",
-        "range": [30, 300],
+        "range": [5, 300],
         "required": true
       },
       "channel_name_format": {
