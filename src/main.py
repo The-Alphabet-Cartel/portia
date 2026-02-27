@@ -85,22 +85,10 @@ def main() -> None:
     # -------------------------------------------------------------------------
     # Initialise Fluxer client
     # -------------------------------------------------------------------------
-    # Use all intents to ensure voice state events are received
     intents = fluxer.Intents.all() if hasattr(fluxer.Intents, 'all') else fluxer.Intents.default()
     intents.message_content = True
     intents.members = True
     intents.voice_states = True
-
-    # If voice_states isn't a valid attr, try alternatives
-    if not hasattr(intents, 'voice_states'):
-        for attr in ['guild_voice_states', 'voice']:
-            if hasattr(intents, attr):
-                setattr(intents, attr, True)
-                log.info(f"Set intent: {attr}")
-                break
-
-    # Log the actual intent value being sent
-    log.info(f"Intents value: {intents.value if hasattr(intents, 'value') else intents}")
 
     bot = fluxer.Bot(
         command_prefix=config_manager.get("bot", "command_prefix", "!"),
