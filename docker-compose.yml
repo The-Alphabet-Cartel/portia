@@ -5,27 +5,50 @@
 # Repository: https://github.com/the-alphabet-cartel/portia
 # Community: The Alphabet Cartel - https://discord.gg/alphabetcartel
 # ============================================================================
+name: portia
+
+### Common Settings ###
+x-common: &common
+  restart: unless-stopped
+  networks:
+    - bragi-net
+
+### Common Environmental Variables ###
+x-env: &env
+  PGID: ${PGID:-1000}
+  PUID: ${PUID:-1000}
+  TZ: ${TZ:-America/Los_Angeles}
+
+### Common Healthcheck Settings ###
+x-health: &health
+  interval: 5s
+  timeout: 10s
+  retries: 3
+  start_period: 60s
+  start_interval: 30s
 
 services:
-  portia-bot:
+  portia:
     image: ghcr.io/the-alphabet-cartel/portia:latest
-    container_name: portia-bot
-    restart: unless-stopped
-    env_file: .env
+    container_name: portia
+    <<: *common
     environment:
+      <<: *env
       TOKEN_FILE: /run/secrets/portia_token
+    env_file: .env
     secrets:
       - portia_token
     volumes:
-      - /opt/bragi/bots/portia-bot/logs:/app/logs
-      - /opt/bragi/bots/portia-bot/data:/app/data
-    networks:
-      - bragi
+      - /opt/bragi/portia/logs:/app/logs
+      - /opt/bragi/portia/data:/app/data
+      - /opt/bragi/portia/config:/app/src/config
+    healthcheck:
+      <<: *health
 
 secrets:
   portia_token:
     file: ./secrets/portia_fluxer_token
 
 networks:
-  bragi:
+  bragi-net:
     external: true

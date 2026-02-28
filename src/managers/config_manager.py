@@ -66,7 +66,7 @@ class ConfigManager:
             "PORTIA_LOG_FILE": ("logging", "file"),
             "LOG_CONSOLE": ("logging", "console"),
             "COMMAND_PREFIX": ("bot", "command_prefix"),
-            "GUILD_ID": ("bot", "guild_id"),
+            "PORTIA_GUILD_ID": ("bot", "guild_id"),
             "PORTIA_LOBBY_CHANNEL_ID": ("voice", "lobby_channel_id"),
             "PORTIA_CATEGORY_ID": ("voice", "category_id"),
             "PORTIA_EMPTY_TIMEOUT": ("voice", "empty_timeout"),

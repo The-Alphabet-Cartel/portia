@@ -63,7 +63,7 @@ Copy `.env.template` to `.env` and configure:
 | `LOG_FORMAT` | `human` | `human` (colorized) or `json` (structured) |
 | `LOG_CONSOLE` | `true` | Enable console logging |
 | `LOG_FILE` | — | Optional log file path |
-| `GUILD_ID` | — | Fluxer guild ID (**required**) |
+| `PORTIA_GUILD_ID` | — | Fluxer guild ID (**required**) |
 | `PORTIA_LOBBY_CHANNEL_ID` | — | Voice channel ID to monitor (**required**) |
 | `PORTIA_CATEGORY_ID` | — | Category for temp channels (optional) |
 | `PORTIA_EMPTY_TIMEOUT` | `60` | Seconds before deleting empty channel (5–300) |
@@ -102,7 +102,7 @@ cd portia
 
 # 2. Copy and configure environment
 cp .env.template .env
-# Edit .env — set PORTIA_LOBBY_CHANNEL_ID and GUILD_ID at minimum
+# Edit .env — set PORTIA_LOBBY_CHANNEL_ID and PORTIA_GUILD_ID at minimum
 
 # 3. Create the bot token secret
 mkdir -p secrets
