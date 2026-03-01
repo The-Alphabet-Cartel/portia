@@ -11,7 +11,7 @@ name: portia
 x-common: &common
   restart: unless-stopped
   networks:
-    - bragi-net
+    - portia-net
 
 ### Common Environmental Variables ###
 x-env: &env
@@ -50,5 +50,5 @@ secrets:
     file: ./secrets/portia_fluxer_token
 
 networks:
-  bragi-net:
-    external: true
+  portia-net:
+    driver: bridge
