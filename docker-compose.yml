@@ -39,9 +39,9 @@ services:
     secrets:
       - portia_token
     volumes:
-      - /opt/bragi/portia/logs:/app/logs
-      - /opt/bragi/portia/data:/app/data
-      - /opt/bragi/portia/config:/app/src/config
+      - ./logs:/app/logs
+      - ./data:/app/data
+      - ./config:/app/src/config
     healthcheck:
       <<: *health
 
