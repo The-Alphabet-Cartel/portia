@@ -18,8 +18,8 @@ bot.
 Single on_voice_state_update dispatcher pattern used because fluxer-py only
 supports one registered handler per event type.
 ----------------------------------------------------------------------------
-FILE VERSION: v1.4.0
-LAST MODIFIED: 2026-02-25
+FILE VERSION: v1.5.0
+LAST MODIFIED: 2026-02-27
 BOT: portia-bot
 CLEAN ARCHITECTURE: Compliant
 Repository: https://github.com/PapaBearDoes/bragi
@@ -109,6 +109,7 @@ def main() -> None:
     # -------------------------------------------------------------------------
     from src.handlers.voice_lobby import VoiceLobbyHandler
     from src.handlers.sweep import SweepHandler
+    from src.handlers.utility_temp import UtilityTempHandler
 
     voice_lobby = VoiceLobbyHandler(
         bot, config_manager, logging_manager, channel_tracker
@@ -121,6 +122,24 @@ def main() -> None:
     )
     sweep.set_token(token)
     log.success("Loaded handler: sweep")  # type: ignore[attr-defined]
+
+    utility = UtilityTempHandler(bot, config_manager, logging_manager)
+    log.success("Loaded handler: utility (staff commands)")  # type: ignore[attr-defined]
+
+    # -------------------------------------------------------------------------
+    # Single on_message dispatcher
+    # -------------------------------------------------------------------------
+    @bot.event
+    async def on_message(message: fluxer.Message) -> None:
+        """Routes messages to relevant handlers."""
+        if message.author.bot:
+            return
+        try:
+            await utility.handle(message)
+        except Exception as e:
+            log.error(
+                f"utility handler error: {e}\n{traceback.format_exc()}"
+            )
 
     # -------------------------------------------------------------------------
     # Single on_voice_state_update dispatcher
