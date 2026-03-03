@@ -18,8 +18,8 @@ bot.
 Single on_voice_state_update dispatcher pattern used because fluxer-py only
 supports one registered handler per event type.
 ----------------------------------------------------------------------------
-FILE VERSION: v1.5.0
-LAST MODIFIED: 2026-02-27
+FILE VERSION: v1.6.0
+LAST MODIFIED: 2026-03-02
 BOT: portia-bot
 CLEAN ARCHITECTURE: Compliant
 Repository: https://github.com/PapaBearDoes/bragi
@@ -34,6 +34,7 @@ import fluxer
 from src.managers.config_manager import create_config_manager
 from src.managers.logging_config_manager import create_logging_config_manager
 from src.managers.channel_tracker_manager import create_channel_tracker_manager
+from src.managers.config_watcher import create_config_watcher
 
 
 def main() -> None:
@@ -127,6 +128,19 @@ def main() -> None:
     log.success("Loaded handler: utility (staff commands)")  # type: ignore[attr-defined]
 
     # -------------------------------------------------------------------------
+    # Initialise config watcher (Rule #13 — hot-reload)
+    # -------------------------------------------------------------------------
+    config_watcher = create_config_watcher()
+
+    async def _on_config_change(filename: str) -> None:
+        """Reload handler config when JSON files change on disk."""
+        if filename == "portia_config.json":
+            config_manager.reload()
+            log.info(f"Hot-reloaded {filename} — config_manager refreshed")
+
+    config_watcher.on_change(_on_config_change)
+
+    # -------------------------------------------------------------------------
     # Single on_message dispatcher
     # -------------------------------------------------------------------------
     @bot.event
@@ -189,6 +203,9 @@ def main() -> None:
 
         # Start the periodic sweep loop
         sweep.start()
+
+        # Start the config file watcher (Rule #13)
+        await config_watcher.start()
 
     # -------------------------------------------------------------------------
     # Start — bot.run() is blocking

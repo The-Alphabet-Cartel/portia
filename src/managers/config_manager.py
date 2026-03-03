@@ -15,8 +15,8 @@ ConfigManager for portia-bot. Loads configuration from JSON defaults, then
 overrides with .env values, then overrides sensitive values from Docker
 Secrets. Implements the three-layer config stack (Rule #4 / Rule #7).
 ----------------------------------------------------------------------------
-FILE VERSION: v1.0.0
-LAST MODIFIED: 2026-02-23
+FILE VERSION: v1.1.0
+LAST MODIFIED: 2026-03-02
 BOT: portia-bot
 CLEAN ARCHITECTURE: Compliant
 Repository: https://github.com/PapaBearDoes/bragi
@@ -35,6 +35,7 @@ log = logging.getLogger("portia-bot.config_manager")
 class ConfigManager:
     def __init__(self, config_path: str = "/app/src/config/portia_config.json") -> None:
         self._config: dict[str, Any] = {}
+        self._config_path = config_path
         self._load_json(config_path)
         self._apply_env_overrides()
         self._apply_secret_overrides()
@@ -105,6 +106,17 @@ class ConfigManager:
     # -------------------------------------------------------------------------
     # Accessors
     # -------------------------------------------------------------------------
+    def reload(self) -> None:
+        """Re-read JSON config from disk and re-apply env/secret overrides.
+
+        Called by the ConfigWatcher on file change (Rule #13 hot-reload).
+        """
+        self._config = {}
+        self._load_json(self._config_path)
+        self._apply_env_overrides()
+        self._apply_secret_overrides()
+        log.info("Configuration reloaded from disk")
+
     def get(self, section: str, key: str, fallback: Any = None) -> Any:
         return self._config.get(section, {}).get(key, fallback)
 

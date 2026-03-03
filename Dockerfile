@@ -1,7 +1,7 @@
 # ============================================================================
 # Portia Bot - Dockerfile
 # ============================================================================
-# FILE VERSION: v1.0.0
+# FILE VERSION: v1.1.0
 # Repository: https://github.com/the-alphabet-cartel/portia
 # Community: The Alphabet Cartel - https://discord.gg/alphabetcartel
 # ============================================================================
@@ -49,8 +49,11 @@ WORKDIR /app
 COPY src/ ./src/
 COPY docker-entrypoint.py ./docker-entrypoint.py
 
+# Stage config defaults for volume seeding (entrypoint copies if volume is empty)
+RUN cp -r /app/src/config /app/config-defaults
+
 # Create runtime directories
-RUN mkdir -p /app/logs /app/data && \
+RUN mkdir -p /app/logs /app/data /app/src/config && \
     chown -R appuser:appgroup /app
 
 # NOTE: No USER directive — entrypoint handles privilege dropping at runtime

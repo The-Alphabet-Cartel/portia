@@ -16,11 +16,11 @@ Docker entrypoint for portia-bot. Reads PUID/PGID from environment, adjusts
 the container user and group, fixes volume ownership, drops privileges, and
 execs the bot process. Rule #12 compliant.
 ----------------------------------------------------------------------------
-FILE VERSION: v1.0.0
-LAST MODIFIED: 2026-02-23
+FILE VERSION: v1.1.0
+LAST MODIFIED: 2026-03-02
 BOT: portia-bot
 CLEAN ARCHITECTURE: Compliant
-Repository: https://github.com/PapaBearDoes/bragi
+Repository: https://github.com/The-Alphabet-Cartel/portia
 ============================================================================
 """
 
@@ -35,8 +35,10 @@ APP_USER = "appuser"
 APP_GROUP = "appgroup"
 DEFAULT_UID = 1000
 DEFAULT_GID = 1000
-WRITABLE_DIRECTORIES = ["/app/logs", "/app/data"]
+WRITABLE_DIRECTORIES = ["/app/logs", "/app/data", "/app/src/config"]
 DEFAULT_COMMAND = ["python", "src/main.py"]
+CONFIG_DEFAULTS_DIR = "/app/config-defaults"
+CONFIG_LIVE_DIR = "/app/src/config"
 
 RESET = "\033[0m"
 CYAN = "\033[96m"
@@ -89,9 +91,37 @@ def drop_privileges(puid: int, pgid: int) -> None:
     log("SUCCESS", f"Privileges dropped → UID={puid} GID={pgid}")
 
 
+def seed_config_volume() -> None:
+    """Copy default config files into the mounted volume if they don't exist.
+
+    The Dockerfile stages defaults into /app/config-defaults/. On first boot
+    (or if a file is missing), they're copied into /app/src/config/ so the
+    volume isn't empty. Existing files are never overwritten — the host
+    directory is the source of truth after initial seeding.
+    """
+    defaults = Path(CONFIG_DEFAULTS_DIR)
+    live = Path(CONFIG_LIVE_DIR)
+
+    if not defaults.exists():
+        log("WARNING", "Config defaults directory not found — skipping seed")
+        return
+
+    live.mkdir(parents=True, exist_ok=True)
+
+    for src_file in defaults.glob("*.json"):
+        dest_file = live / src_file.name
+        if not dest_file.exists():
+            import shutil
+            shutil.copy2(src_file, dest_file)
+            log("INFO", f"Seeded config: {src_file.name}")
+        else:
+            log("INFO", f"Config exists, skipping: {src_file.name}")
+
+
 def main() -> None:
     log("INFO", f"Starting {COMPONENT_NAME} entrypoint")
     puid, pgid = get_puid_pgid()
+    seed_config_volume()
     setup_user_and_permissions(puid, pgid)
     drop_privileges(puid, pgid)
     command = sys.argv[1:] if len(sys.argv) > 1 else DEFAULT_COMMAND
