@@ -11,7 +11,7 @@ name: portia
 x-common: &common
   restart: unless-stopped
   networks:
-    - portia-net
+    - portia
 
 ### Common Environmental Variables ###
 x-env: &env
@@ -39,9 +39,9 @@ services:
     secrets:
       - portia_token
     volumes:
-      - ./logs:/app/logs
-      - ./data:/app/data
       - ./config:/app/src/config
+      - ./data:/app/data
+      - ./logs:/app/logs
     healthcheck:
       <<: *health
 
@@ -50,5 +50,5 @@ secrets:
     file: ./secrets/portia_fluxer_token
 
 networks:
-  portia-net:
+  portia:
     driver: bridge
